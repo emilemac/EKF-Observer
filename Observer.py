@@ -11,7 +11,7 @@ def hat(v):
 
 class Observer:
 
-    def __init__(self):
+    def __init__(self, G=2.50e+10, E=6.43e+10):
         self.r_0 = np.array([0, 0, 0]).reshape(3, 1)
         self.u_0 = np.array([10, 5, 0]).reshape(3, 1)  # initial curvature
         self.r = np.empty((0, 3))
@@ -25,14 +25,14 @@ class Observer:
         self.R_0 = np.array(
             [[np.cos(self.alpha_1_0), -np.sin(self.alpha_1_0), 0], [np.sin(self.alpha_1_0), np.cos(self.alpha_1_0), 0],
              [0, 0, 1]]).reshape(9, 1)
-        self.E = 6.43e+10
-        self.G = 2.50e+10
+        self.E = E
+        self.G = G
         self.I = (pi * (pow(2 * 0.55e-3, 4) - pow(2 * 0.35e-3, 4))) / 64
         self.J = (pi * (pow(2 * 0.55e-3, 4) - pow(2 * 0.35e-3, 4))) / 32
         self.K = np.diag(np.array([self.E * self.I, self.E * self.I, self.G * self.J]))
         self.length = 431e-3
 
-        self.u_star = np.array([10, 5, 0]).reshape(3, 1)
+        self.u_star = np.array([14, 5, 0]).reshape(3, 1)
         self.step = 0.001
 
         # Initial values for the observer
@@ -41,7 +41,7 @@ class Observer:
         self.P_0 = np.eye(3).reshape(9, 1)
         self.C_0 = np.zeros((2, 3)).reshape(6, 1)
         self.D_0 = np.zeros((3, 3)).reshape(9, 1)
-        self.E_0 = np.eye(3).reshape(9, 1)#np.zeros((3, 3)).reshape(9, 1)
+        self.E_0 = np.zeros((3, 3)).reshape(9, 1)
 
     # f(u) = du/ds
     def f_u(self, u):
@@ -105,7 +105,7 @@ class Observer:
         ans = s.y.transpose()
         self.r = np.vstack((self.r, ans[:, (0, 1, 2)]))
 
-    def observer_ode(self, s, y):
+    def observer_ode(self, s, y, observations):
         dydt = np.empty([48, 1])
         # first 3 elements of y are r,
         # next 9 are R,
@@ -138,7 +138,10 @@ class Observer:
 
         dr = R @ e3
         dR = R @ hat(u)
-        du = self.f_u(u)# + H @ (measurement - B @ r)  # u' = f(u) + H(y - h(u))
+        obs_idx = int(round(s / self.length * (len(observations)-1)))
+        observed_xz = observations[obs_idx].reshape(2,1)
+        h = B @ r
+        du = self.f_u(u) + H @ (observed_xz - h)  # u' = f(u) + H(y - h(u))
 
         dydt[:3, :] = dr.reshape(3, 1)
         dydt[3:12, :] = dR.reshape(9, 1)
@@ -151,9 +154,9 @@ class Observer:
         assert dydt.shape == (48, 1)
         return dydt.ravel()
 
-    def solve_observer(self):
+    def solve_observer(self, observations):
         y_0 = np.vstack((self.r_0, self.R_0, self.u_0, self.C_0, self.D_0, self.E_0, self.P_0)).ravel()
-        s = solve_ivp(lambda s, y: self.observer_ode(s, y), (0, self.length), y_0, method='RK23', max_step=self.step)
+        s = solve_ivp(lambda s, y: self.observer_ode(s, y, observations), (0, self.length), y_0, method='RK23', max_step=self.step)
         ans = s.y.transpose()
         self.r = np.vstack((self.r, ans[:, (0, 1, 2)]))
 
@@ -182,11 +185,22 @@ def main():
     obs3.plot(ax, "Au approx", '-g')
     print(np.mean(np.abs(obs1.r - obs2.r), axis=0)/obs1.length)'''
 
-    obs = Observer()
     fig = plt.figure()
     ax = plt.axes(projection='3d')
-    obs.solve_observer()
-    obs.plot(ax, 'EKF observer', '-r')
+
+    # Simulate observations
+    obs_sim = Observer(G=2e+10, E=7e+10)  # perturb the model
+    obs_sim.solve(0)
+    observations = obs_sim.r[:,[0,2]]  # Only have x and z values
+    obs_sim.plot(ax, "Observations", '-g')
+
+    obs_base = Observer()
+    obs_base.solve(0)
+    obs_base.plot(ax, 'Model only', '-r')
+
+    obs = Observer()
+    obs.solve_observer(observations)
+    obs.plot(ax, 'EKF observer', '-b')
 
     plt.grid(True)
     plt.legend()
