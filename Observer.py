@@ -48,17 +48,18 @@ class Observer:
         u = u.reshape(3, 1)
         return -np.linalg.inv(self.K) @ (hat(u) @ self.K @ (u - self.u_star))
 
-    # Approximation of A: Aij = (f(u+Δuj) - f(u))i / Δui
+    # Approximation of A: Aij = (f(u+Δuj) - f(u-Δuj))i / 2Δui
+    # (adding and subtracting Δu on both sides gives more accurate values around u)
     def A_approx(self, u):
         step = 0.0001
         du0 = np.array([step, 0, 0]).reshape(3, 1)
         du1 = np.array([0, step, 0]).reshape(3, 1)
         du2 = np.array([0, 0, step]).reshape(3, 1)
-        df0 = self.f_u(u + du0) - self.f_u(u)
-        df1 = self.f_u(u + du1) - self.f_u(u)
-        df2 = self.f_u(u + du2) - self.f_u(u)
+        df0 = self.f_u(u + du0) - self.f_u(u - du0)
+        df1 = self.f_u(u + du1) - self.f_u(u - du1)
+        df2 = self.f_u(u + du2) - self.f_u(u - du2)
         df = np.concatenate((df0, df1, df2), axis=1)
-        A = df / step
+        A = df / (2*step)
         return A
 
     # The exact derivative of f(u) w.r.t. u, ignoring force
