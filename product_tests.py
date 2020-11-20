@@ -6,8 +6,8 @@ but,
 dFG/dx = G.T @ dF/dx + (F @ (dG/dx).T).T
 indeed does.
 
-C  = B * dr/du
-C' = B * dRe3/du = B * (e3.T @ dR/du)
+C  = B @ dr/du
+C' = B @ dRe3/du = B @ (e3.T @ dR/du)
 D  = dR/du
 then
 D' = dRu^/du
