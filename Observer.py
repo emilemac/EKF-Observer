@@ -23,14 +23,63 @@ du_hat_du = np.array([[[0, 0, 0],
                        [0, 0, 0]]])
 
 
+# Approximates C = B * dr/du at step s
+def C_approx_1(B, s, u, epsilon = 0.001):
+    # Initialize observer with u_0 and u_star equal to u
+    observer_u = Observer()
+    observer_u.u_0 = u
+    observer_u.u_star = u
+    observer_u.solve(0)
+    rs = observer_u.r
+    us = observer_u.u
+    l = observer_u.length
+    idx = int(np.round(len(us) * s / l))
+    C = np.zeros((3, 3))
+    # Initialize observers with u_0 and u_star equal to u + epsilon
+    for i in range(3):
+        e_i = np.zeros((3,1))
+        e_i[i] = epsilon
+        observer_epsilon = Observer()
+        observer_epsilon.u_0 = u + epsilon
+        observer_epsilon.u_star = u + epsilon
+        observer_epsilon.solve(0)
+        rs_ = observer_epsilon.r
+        us_ = observer_epsilon.u
+        l_ = observer_epsilon.length
+        idx_ = int(np.round(len(us_) * s / l_))
+        C[:,i] = (rs[idx] - rs_[idx_]) / (us[idx] - us_[idx_])[i]
+    C = B @ C
+    return C
+
+
+# Approximate C, (dr/du)ij = (r(u+Δuj) - r(u))i / Δui
+def C_approx_2(B, u, epsilon=0.001):
+    # Initialize observer with u_0 = u and u_star = u + ei * epsilon, for i = 1, 2, 3
+    C = np.zeros((3,3))
+    for i in range(3):
+        e_i = np.zeros((3, 1))
+        e_i[i] = epsilon
+        observer_u = Observer()
+        observer_u.u_0 = u
+        observer_u.u_star = u + e_i
+        observer_u.solve(0)
+        r_diff = observer_u.r[1] - observer_u.r[0]
+        u_diff = (observer_u.u[1] - observer_u.u[0])[i]
+        C[:,i] = np.array(r_diff/u_diff)
+    C = B @ C
+    return C
+
+
+
 class Observer:
 
     def __init__(self, G=2.50e+10, E=6.43e+10):
         self.r_0 = np.array([0, 0, 0]).reshape(3, 1)
         self.u_0 = np.array([5, 3, 3]).reshape(3, 1)  # initial curvature
         self.r = np.empty((0, 3))
+        self.u = np.empty((0, 3))
 
-        # Tube parameters reused from CTR_KinematicModel
+        # Tube parameters from CTR_KinematicModel
         # Joint variables
         self.q = np.array([0.01, 0.015, 0.019, 0, 0, 0])
         # Initial position of joints
@@ -50,7 +99,7 @@ class Observer:
         self.step = 0.001
 
         # Initial values for the observer
-        self.Q = np.eye(3) * 1000
+        self.Q = np.eye(3) * 10000000
         self.R = np.eye(2) * 1
         self.P_0 = np.eye(3).reshape(9, 1) * 1
         self.C_0 = np.zeros((2, 3)).reshape(6, 1)
@@ -121,6 +170,7 @@ class Observer:
         s = solve_ivp(lambda s, y: self.ode_eq(s, y, method), (0, self.length), y_0, method='RK23', max_step=self.step)
         ans = s.y.transpose()
         self.r = np.vstack((self.r, ans[:, (0, 1, 2)]))
+        self.u = np.vstack((self.r, ans[:, (12, 13, 14)]))
 
     def observer_ode_r(self, s, y, observations):
         dydt = np.empty([24, 1])
@@ -318,7 +368,7 @@ class Observer:
             y_0 = np.vstack((self.r_0, self.R_0, self.u_0, self.C_0, self.D_0, self.P_0)).ravel()
             s = solve_ivp(lambda s, y: self.observer_ode_new(s, y, observations), (0, self.length), y_0, method='RK23',
                           max_step=self.step)
-        elif method == 2:  # use the last method with correct E
+        elif method == 2:  # use the last method with corrected E
             y_0 = np.vstack((self.r_0, self.R_0, self.u_0, self.C_0, self.D_0, self.E_0, self.F_0, self.P_0)).ravel()
             s = solve_ivp(lambda s, y: self.observer_ode_fixedE(s, y, observations), (0, self.length), y_0,
                           method='RK23', max_step=self.step)
@@ -328,6 +378,7 @@ class Observer:
                           method='RK23', max_step=self.step)
         ans = s.y.transpose()
         self.r = np.vstack((self.r, ans[:, (0, 1, 2)]))
+        self.u = np.vstack((self.u, ans[:, (12, 13, 14)]))
 
     def plot(self, ax, title, color):
         # plot the robot shape
@@ -341,18 +392,6 @@ class Observer:
 
 
 def main():
-    '''obs1 = Observer()
-    obs2 = Observer()
-    obs3 = Observer()
-    fig = plt.figure()
-    ax = plt.axes(projection='3d')
-    obs1.solve(0)
-    obs1.plot(ax, "u\'", '-r')
-    obs2.solve(1)
-    obs2.plot(ax, "Au", '-b')
-    obs3.solve(2)
-    obs3.plot(ax, "Au approx", '-g')
-    print(np.mean(np.abs(obs1.r - obs2.r), axis=0)/obs1.length)'''
 
     fig = plt.figure()
     ax = plt.axes(projection='3d')
@@ -368,12 +407,14 @@ def main():
     obs_base.plot(ax, 'Model only', '-r')
 
     obs = Observer()
-    obs.solve_observer(observations, method=3)
-    obs.plot(ax, 'EKF observer', '-b')
+    obs.solve_observer(observations, method=1)
+    obs.plot(ax, 'EKF observer old E', '-y')
+    print(obs.u[-1] - obs.u_star.T)
 
-    #obs1 = Observer()
-    #obs1.solve_observer(observations, method=2)
-    #obs1.plot(ax, 'EKF observer, new', '-y')
+    obs1 = Observer()
+    obs1.solve_observer(observations, method=2)
+    obs1.plot(ax, 'EKF observer new E', '-b')
+    print(obs1.u[-1] - obs1.u_star.T)
 
     plt.grid(True)
     plt.legend()
