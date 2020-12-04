@@ -189,6 +189,7 @@ class Observer:
         return dydt.ravel()
 
 
+    # Same as observer_ode_tensors, but uses 3d observations
     def observer_ode_3d(self, s, y, observations):
         dydt = np.empty([60, 1])
         # first 3 elements of y are r,
@@ -235,6 +236,7 @@ class Observer:
         return dydt.ravel()
 
 
+    # A = du'(s)/du(l) and C = dBr(s)/du(l)
     def observer_ode_tensors_new(self, s, y, observations):
         dydt = np.empty([66, 1])
         # first 3 elements of y are r,
@@ -288,7 +290,7 @@ class Observer:
         assert dydt.shape == (66, 1)
         return dydt.ravel()
 
-
+    # Same as observer_ode_tensors_new, but uses 3d observations
     def observer_ode_3d_new(self, s, y, observations):
         dydt = np.empty([69, 1])
         # first 3 elements of y are r,
@@ -343,6 +345,8 @@ class Observer:
         return dydt.ravel()
 
 
+    # Updates r' instead of u'
+    # A = dr'(s)/dr(l), C = B
     def observer_ode_3d_new_r(self, s, y, observations):
         dydt = np.empty([60, 1])
         # first 3 elements of y are r,
@@ -366,7 +370,6 @@ class Observer:
         A = (e3.T @ D).reshape(3, 3)
         B = np.eye(3)
         C = B
-        #E = du_hat_du @ F  # also try F.T @ du
         E = F.T @ du_hat_du
         dD = (hat(u)).T @ D + (R @ (E).transpose(1, 0, 2)).transpose(1, 0, 2)
         dF = np.linalg.inv(self.K) @ (hat(self.K @ (u - self.u_0)) @ F - hat(u) @ self.K @ F)
@@ -391,6 +394,8 @@ class Observer:
         assert dydt.shape == (60, 1)
         return dydt.ravel()
 
+
+    # Same as observer_ode_3d_new_r, but uses 2d observations
     def observer_ode_2d_new_r(self, s, y, observations):
         dydt = np.empty([60, 1])
         # first 3 elements of y are r,
@@ -414,7 +419,6 @@ class Observer:
         A = (e3.T @ D).reshape(3, 3)
         B = np.array([[1, 0, 0], [0, 0, 1]])
         C = B
-        #E = du_hat_du @ F  # also try F.T @ du
         E = F.T @ du_hat_du
         dD = (hat(u)).T @ D + (R @ (E).transpose(1, 0, 2)).transpose(1, 0, 2)
         dF = np.linalg.inv(self.K) @ (hat(self.K @ (u - self.u_0)) @ F - hat(u) @ self.K @ F)
