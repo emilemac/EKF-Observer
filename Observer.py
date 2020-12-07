@@ -11,6 +11,8 @@ def hat(v):
                      [-v[1, 0], v[0, 0], 0.0]])
 
 
+e3 = np.array([0, 0, 1]).reshape(3, 1)
+
 # du^/du, 3x3x3 array
 du_hat_du = np.array([[[0, 0, 0],
                        [0, 0, -1],
@@ -64,18 +66,22 @@ class Observer:
         self.step = 0.001
 
         # Initial values for the observer
-        self.Q = np.eye(3) * 1000000
+        self.Q = np.eye(3) * 10000000
         self.R = np.eye(2) * 10
-        self.P_0 = np.eye(3).reshape(9, 1) * 1
-        self.C_0 = np.zeros((2, 3)).reshape(6, 1)
+        self.P_0 = np.eye(3).reshape(9, 1)
         self.D_0 = np.zeros((3, 3, 3)).reshape(27, 1)
-        self.X_0 = np.eye(3).reshape(9,1)
+        self.F_0 = np.zeros((3, 3)).reshape(9, 1)
+
+        self.force = np.array([0.,0.,0.]).reshape(3,1)
+
+        np.random.seed(0)
+        self.B = np.random.randn(3,3)
 
 
     # f(u) = du/ds
-    def f_u(self, u):
+    def f_u(self, u, R=np.zeros((3,3))):
         u = u.reshape(3, 1)
-        return -np.linalg.inv(self.K) @ (hat(u) @ self.K @ (u - self.u_star))
+        return -np.linalg.inv(self.K) @ (hat(u) @ self.K @ (u - self.u_star) + hat(e3) @ R @ self.force)
 
 
     # Approximation of A: Aij = (f(u+Δuj) - f(u-Δuj))i / 2Δui
@@ -103,7 +109,7 @@ class Observer:
 
 
     # Ode using only CTR equations
-    def ode_eq(self, s, y, method=0):
+    def ode_eq(self, s, y):
         dydt = np.empty([15, 1])
         # first 3 elements of y are r, next 9 are R, next 3 are u
         r = np.array(y[:3]).reshape(3, 1)
@@ -111,19 +117,12 @@ class Observer:
                       [y[6], y[7], y[8]],
                       [y[9], y[10], y[11]]])
         u = np.array(y[12:]).reshape(3, 1)
-        # A = np.array([[y[15], y[16], y[17]],[y[18], y[19], y[20]], [y[21], y[22], y[23]]])
 
         # Derivatives
         e3 = np.array([0, 0, 1]).reshape(3, 1)
         dr = R @ e3
         dR = R @ hat(u)
-
-        if method == 0:
-            du = self.f_u(u)
-        elif method == 1:
-            du = np.dot(self.A_exact(u), u)  # A = df/du -> f = A*u + C, f= u'
-        else:
-            du = np.dot(self.A_approx(u), u)
+        du = self.f_u(u,R)
 
         dydt[:3, :] = dr.reshape(3, 1)
         dydt[3:12, :] = dR.reshape(9, 1)
@@ -133,216 +132,12 @@ class Observer:
         return dydt.ravel()
 
 
-    def solve(self, method):
+    def solve(self):
         y_0 = np.vstack((self.r_0, self.R_0, self.u_0)).ravel()
-        s = solve_ivp(lambda s, y: self.ode_eq(s, y, method), (0, self.length), y_0, method='RK23', max_step=self.step)
+        s = solve_ivp(lambda s, y: self.ode_eq(s, y), (0, self.length), y_0, method='RK23', max_step=self.step)
         ans = s.y.transpose()
         self.r = np.vstack((self.r, ans[:, (0, 1, 2)]))
         self.u = np.vstack((self.r, ans[:, (12, 13, 14)]))
-
-
-    def observer_ode_tensors(self, s, y, observations):
-        dydt = np.empty([57, 1])
-        # first 3 elements of y are r,
-        # next 9 are R,
-        # next 3 are u,
-        # next 6 are C,
-        # next 27 are D
-        # last 9 are P
-
-        r = np.array(y[:3]).reshape(3, 1)
-        R = np.array([[y[3], y[4], y[5]],
-                      [y[6], y[7], y[8]],
-                      [y[9], y[10], y[11]]])
-        u = np.array(y[12:15]).reshape(3, 1)
-        C = np.array(y[15:21]).reshape(2, 3)
-        D = np.array(y[21:48]).reshape(3, 3, 3)
-        P = np.array(y[48:]).reshape(3, 3)
-
-        # Derivatives
-        e3 = np.array([0, 0, 1]).reshape(3, 1)
-        A = self.A_exact(u)
-        B = np.array([[0, 1, 0], [0, 0, 1]])
-        #dC = B @ D @ e3
-        #dD = D @ hat(u) + R @ du_hat_du
-        dC = B @ (e3.T @ D).reshape(3,3)
-        dD = (hat(u)).T @ D + (R @ (du_hat_du).transpose(1,0,2)).transpose(1,0,2)
-
-        dP = A @ P + P @ A.T + self.Q - P @ C.T @ np.linalg.inv(self.R) @ C @ P
-        H = P @ C.T @ np.linalg.inv(self.R)
-
-        dr = R @ e3
-        dR = R @ hat(u)
-        obs_idx = int(round(s / self.length * (len(observations) - 1)))
-        observed_xz = observations[obs_idx].reshape(2, 1)
-        h = B @ r
-        du = self.f_u(u) + H @ (observed_xz - h)  # u' = f(u) + H(y - h(u))
-
-        dydt[:3, :] = dr.reshape(3, 1)
-        dydt[3:12, :] = dR.reshape(9, 1)
-        dydt[12:15, :] = du.reshape(3, 1)
-        dydt[15:21, :] = dC.reshape(6, 1)
-        dydt[21:48, :] = dD.reshape(27, 1)
-        dydt[48:, :] = dP.reshape(9, 1)
-
-        assert dydt.shape == (57, 1)
-        return dydt.ravel()
-
-
-    # Same as observer_ode_tensors, but uses 3d observations
-    def observer_ode_3d(self, s, y, observations):
-        dydt = np.empty([60, 1])
-        # first 3 elements of y are r,
-        # next 9 are R,
-        # next 3 are u,
-        # next 9 are C,
-        # next 27 are D
-        # last 9 are P
-
-        r = np.array(y[:3]).reshape(3, 1)
-        R = np.array([[y[3], y[4], y[5]],
-                      [y[6], y[7], y[8]],
-                      [y[9], y[10], y[11]]])
-        u = np.array(y[12:15]).reshape(3, 1)
-        C = np.array(y[15:24]).reshape(3, 3)
-        D = np.array(y[24:51]).reshape(3, 3, 3)
-        P = np.array(y[51:]).reshape(3, 3)
-
-        # Derivatives
-        e3 = np.array([0, 0, 1]).reshape(3, 1)
-        A = self.A_exact(u)
-        B = np.eye(3)
-        dC = B @ (e3.T @ D).reshape(3,3)
-        dD = (hat(u)).T @ D + (R @ (du_hat_du).transpose(1,0,2)).transpose(1,0,2)
-
-        dP = A @ P + P @ A.T + self.Q - P @ C.T @ np.linalg.inv(self.R) @ C @ P
-        H = P @ C.T @ np.linalg.inv(self.R)
-
-        dr = R @ e3
-        dR = R @ hat(u)
-        obs_idx = int(round(s / self.length * (len(observations) - 1)))
-        observed_xz = observations[obs_idx].reshape(3, 1)
-        h = B @ r
-        du = self.f_u(u) + H @ (observed_xz - h)  # u' = f(u) + H(y - h(u))
-
-        dydt[:3, :] = dr.reshape(3, 1)
-        dydt[3:12, :] = dR.reshape(9, 1)
-        dydt[12:15, :] = du.reshape(3, 1)
-        dydt[15:24, :] = dC.reshape(9, 1)
-        dydt[24:51, :] = dD.reshape(27, 1)
-        dydt[51:, :] = dP.reshape(9, 1)
-
-        assert dydt.shape == (60, 1)
-        return dydt.ravel()
-
-
-    # A = du'(s)/du(l) and C = dBr(s)/du(l)
-    def observer_ode_tensors_new(self, s, y, observations):
-        dydt = np.empty([66, 1])
-        # first 3 elements of y are r,
-        # next 9 are R,
-        # next 3 are u,
-        # next 6 are C,
-        # next 27 are D,
-        # next 27 are X
-        # last 9 are P
-
-        r = np.array(y[:3]).reshape(3, 1)
-        R = np.array([[y[3], y[4], y[5]],
-                      [y[6], y[7], y[8]],
-                      [y[9], y[10], y[11]]])
-        u = np.array(y[12:15]).reshape(3, 1)
-        C = np.array(y[15:21]).reshape(2, 3)
-        D = np.array(y[21:48]).reshape(3, 3, 3)
-        X = np.array(y[48:57]).reshape(3, 3)
-        P = np.array(y[57:]).reshape(3, 3)
-
-        # Derivatives
-        e3 = np.array([0, 0, 1]).reshape(3, 1)
-        A = self.A_exact(u)
-        B = np.array([[1, 0, 0], [0, 0, 1]])
-        # C' = B @ D @ e3
-        # D' = D @ u^ + R @ du^/du
-        # du^/du is a function of X
-        dC = B @ (e3.T @ D).reshape(3,3)
-        dD = (hat(u)).T @ D + (R @ (du_hat(X)).transpose(1,0,2)).transpose(1,0,2)
-        dX = np.linalg.inv(self.K) @ (hat(self.K @ (u - self.u_0)) @ X - hat(u) @ self.K @ X)
-        A = dX
-
-        dP = A @ P + P @ A.T + self.Q - P @ C.T @ np.linalg.inv(self.R) @ C @ P
-        H = P @ C.T @ np.linalg.inv(self.R)
-
-        dr = R @ e3
-        dR = R @ hat(u)
-        obs_idx = int(round(s / self.length * (len(observations) - 1)))
-        observed_xz = observations[obs_idx].reshape(2, 1)
-        h = B @ r
-        du = self.f_u(u) + H @ (observed_xz - h)  # u' = f(u) + H(y - h(u))
-
-        dydt[:3, :] = dr.reshape(3, 1)
-        dydt[3:12, :] = dR.reshape(9, 1)
-        dydt[12:15, :] = du.reshape(3, 1)
-        dydt[15:21, :] = dC.reshape(6, 1)
-        dydt[21:48, :] = dD.reshape(27, 1)
-        dydt[48:57, :] = dX.reshape(9, 1)
-        dydt[57:, :] = dP.reshape(9, 1)
-
-        assert dydt.shape == (66, 1)
-        return dydt.ravel()
-
-    # Same as observer_ode_tensors_new, but uses 3d observations
-    def observer_ode_3d_new(self, s, y, observations):
-        dydt = np.empty([69, 1])
-        # first 3 elements of y are r,
-        # next 9 are R,
-        # next 3 are u,
-        # next 9 are C,
-        # next 27 are D,
-        # next 27 are X
-        # last 9 are P
-
-        r = np.array(y[:3]).reshape(3, 1)
-        R = np.array([[y[3], y[4], y[5]],
-                      [y[6], y[7], y[8]],
-                      [y[9], y[10], y[11]]])
-        u = np.array(y[12:15]).reshape(3, 1)
-        C = np.array(y[15:24]).reshape(3, 3)
-        D = np.array(y[24:51]).reshape(3, 3, 3)
-        X = np.array(y[51:60]).reshape(3, 3)
-        P = np.array(y[60:]).reshape(3, 3)
-
-        # Derivatives
-        e3 = np.array([0, 0, 1]).reshape(3, 1)
-        A = self.A_exact(u)
-        B = np.eye(3)
-        # C' = B @ D @ e3
-        # D' = D @ u^ + R @ du^/du
-        # du^/du is a function of X
-        dC = B @ (e3.T @ D).reshape(3, 3)
-        dD = (hat(u)).T @ D + (R @ (du_hat(X)).transpose(1, 0, 2)).transpose(1, 0, 2)
-        dX = np.linalg.inv(self.K) @ (hat(self.K @ (u - self.u_0)) @ X - hat(u) @ self.K @ X)
-        A = dX
-
-        dP = A @ P + P @ A.T + self.Q - P @ C.T @ np.linalg.inv(self.R) @ C @ P
-        H = P @ C.T @ np.linalg.inv(self.R)
-
-        dr = R @ e3
-        dR = R @ hat(u)
-        obs_idx = int(round(s / self.length * (len(observations) - 1)))
-        observed_xz = observations[obs_idx].reshape(3, 1)
-        h = B @ r
-        du = self.f_u(u) + H @ (observed_xz - h)  # u' = f(u) + H(y - h(u))
-
-        dydt[:3, :] = dr.reshape(3, 1)
-        dydt[3:12, :] = dR.reshape(9, 1)
-        dydt[12:15, :] = du.reshape(3, 1)
-        dydt[15:24, :] = dC.reshape(9, 1)
-        dydt[24:51, :] = dD.reshape(27, 1)
-        dydt[51:60, :] = dX.reshape(9, 1)
-        dydt[60:, :] = dP.reshape(9, 1)
-
-        assert dydt.shape == (69, 1)
-        return dydt.ravel()
 
 
     # Updates r' instead of u'
@@ -363,12 +158,13 @@ class Observer:
         u = np.array(y[12:15]).reshape(3, 1)
         D = np.array(y[15:42]).reshape(3, 3, 3)
         F = np.array(y[42:51]).reshape(3, 3)
-        P = np.array(y[51:]).reshape(3, 3)
+        P = np.array(y[51:60]).reshape(3, 3)
 
         # Derivatives
         e3 = np.array([0, 0, 1]).reshape(3, 1)
         A = (e3.T @ D).reshape(3, 3)
         B = np.eye(3)
+        #B = self.B # random B
         C = B
         E = F.T @ du_hat_du
         dD = (hat(u)).T @ D + (R @ (E).transpose(1, 0, 2)).transpose(1, 0, 2)
@@ -380,7 +176,7 @@ class Observer:
         obs_idx = int(round(s / self.length * (len(observations) - 1)))
         observed_xyz = observations[obs_idx].reshape(3, 1)
         h = B @ r
-        dr = R @ e3 + H @ (observed_xyz - h)
+        dr = R @ e3 + H @ (B @ observed_xyz - h)
         dR = R @ hat(u)
         du = self.f_u(u)
 
@@ -389,7 +185,7 @@ class Observer:
         dydt[12:15, :] = du.reshape(3, 1)
         dydt[15:42, :] = dD.reshape(27, 1)
         dydt[42:51, :] = dF.reshape(9, 1)
-        dydt[51:, :] = dP.reshape(9, 1)
+        dydt[51:60, :] = dP.reshape(9, 1)
 
         assert dydt.shape == (60, 1)
         return dydt.ravel()
@@ -415,23 +211,22 @@ class Observer:
         P = np.array(y[51:]).reshape(3, 3)
 
         # Derivatives
-        e3 = np.array([0, 0, 1]).reshape(3, 1)
         A = (e3.T @ D).reshape(3, 3)
-        B = np.array([[1, 0, 0], [0, 0, 1]])
+        B = np.array([[0.5, 0, 0.5], [0, 0.5, 0.5]])
         C = B
         E = F.T @ du_hat_du
         dD = (hat(u)).T @ D + (R @ (E).transpose(1, 0, 2)).transpose(1, 0, 2)
-        dF = np.linalg.inv(self.K) @ (hat(self.K @ (u - self.u_0)) @ F - hat(u) @ self.K @ F)
+        dF = np.linalg.inv(self.K) @ (hat(self.K @ (u - self.u_0)) @ F - hat(u) @ self.K @ F - hat(e3) @ (self.force.T @ D).reshape(3,3))
 
         dP = A @ P + P @ A.T + self.Q - P @ C.T @ np.linalg.inv(self.R) @ C @ P
         H = P @ C.T @ np.linalg.inv(self.R)
 
         obs_idx = int(round(s / self.length * (len(observations) - 1)))
-        observed_xz = observations[obs_idx].reshape(2, 1)
+        observed_xz = B @ observations[obs_idx].reshape(3, 1)
         h = B @ r
         dr = R @ e3 + H @ (observed_xz - h)
         dR = R @ hat(u)
-        du = self.f_u(u)
+        du = self.f_u(u,R)
 
         dydt[:3, :] = dr.reshape(3, 1)
         dydt[3:12, :] = dR.reshape(9, 1)
@@ -445,38 +240,16 @@ class Observer:
 
 
     def solve_observer(self, observations, method=0):
-        if method == 0:
-            self.C_0 = np.zeros((2, 3)).reshape(6, 1)
-            self.D_0 = np.zeros((3, 3, 3)).reshape(27, 1)
-            y_0 = np.vstack((self.r_0, self.R_0, self.u_0, self.C_0, self.D_0, self.P_0)).ravel()
-            s = solve_ivp(lambda s, y: self.observer_ode_tensors(s, y, observations), (0, self.length), y_0, method='RK23',
-                          max_step=self.step)
-        elif method == 1:
-            self.C_0 = np.zeros((3, 3)).reshape(9, 1)
+        if method == 0: # Use 3D information
             self.D_0 = np.zeros((3, 3, 3)).reshape(27, 1)
             self.R = self.R[0, 0] * np.eye(3)
-            y_0 = np.vstack((self.r_0, self.R_0, self.u_0, self.C_0, self.D_0, self.P_0)).ravel()
-            s = solve_ivp(lambda s, y: self.observer_ode_3d(s, y, observations), (0, self.length), y_0, method='RK23',
+            y_0 = np.vstack((self.r_0, self.R_0, self.u_0, self.D_0, self.F_0, self.P_0)).ravel()
+            s = solve_ivp(lambda s, y: self.observer_ode_3d_new_r(s, y, observations), (0, self.length), y_0,
+                          method='RK23',
                           max_step=self.step)
-        elif method == 2:
-            self.C_0 = np.zeros((2, 3)).reshape(6, 1)
+        elif method == 1: # Use 2D information
             self.D_0 = np.zeros((3, 3, 3)).reshape(27, 1)
-            y_0 = np.vstack((self.r_0, self.R_0, self.u_0, self.C_0, self.D_0, self.X_0, self.P_0)).ravel()
-            s = solve_ivp(lambda s, y: self.observer_ode_tensors_new(s, y, observations), (0, self.length), y_0, method='RK23',
-                          max_step=self.step)
-        elif method == 3:
-            self.C_0 = np.zeros((3, 3)).reshape(9, 1)
-            self.D_0 = np.zeros((3, 3, 3)).reshape(27, 1)
-            self.R = self.R[0, 0] * np.eye(3)
-            y_0 = np.vstack((self.r_0, self.R_0, self.u_0, self.C_0, self.D_0, self.X_0, self.P_0)).ravel()
-            s = solve_ivp(lambda s, y: self.observer_ode_3d_new(s, y, observations), (0, self.length), y_0, method='RK23',
-                          max_step=self.step)
-        elif method == 4:
-            self.C_0 = np.zeros((3, 3)).reshape(9, 1)
-            self.D_0 = np.zeros((3, 3, 3)).reshape(27, 1)
-            #self.R = self.R[0, 0] * np.eye(3)
-            self.X_0 = np.zeros((3, 3)).reshape(9, 1)
-            y_0 = np.vstack((self.r_0, self.R_0, self.u_0, self.D_0, self.X_0, self.P_0)).ravel()
+            y_0 = np.vstack((self.r_0, self.R_0, self.u_0, self.D_0, self.F_0, self.P_0)).ravel()
             s = solve_ivp(lambda s, y: self.observer_ode_2d_new_r(s, y, observations), (0, self.length), y_0,
                           method='RK23',
                           max_step=self.step)
@@ -502,24 +275,20 @@ def main():
     ax = plt.axes(projection='3d')
 
     obs_base = Observer()
-    obs_base.solve(0)
+    obs_base.solve()
     obs_base.plot(ax, 'Model only', '-r')
 
     # Simulate observations
     obs_sim = Observer(G=2e+10, E=7e+10)  # perturb the model
     obs_sim.u_0 += 0.5
-    obs_sim.solve(0)
-    observations = obs_sim.r[:, [0, 2]]  # Only have x and z values
-    #obs_sim.r[:, 1] = obs_base.r[:, 1]
+    obs_sim.solve()
+    observations = obs_sim.r[:, [0, 1, 2]]
+    #obs_sim.r[:,0] = 0
     obs_sim.plot(ax, "Observations", '-g')
 
     obs = Observer()
-    obs.solve_observer(observations, method=0)
-    #obs.plot(ax, 'EKF observer old', '-b')
-
-    obs1 = Observer()
-    obs1.solve_observer(observations, method=4)
-    obs1.plot(ax, 'EKF observer r', '-b')
+    obs.solve_observer(observations, method=1)
+    obs.plot(ax, 'EKF observer', '-b')
 
     plt.grid(True)
     plt.legend()
